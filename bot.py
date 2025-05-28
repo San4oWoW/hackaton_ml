@@ -1,70 +1,44 @@
 import logging
+import pickle
 import nest_asyncio
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackContext
-import asyncio
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from preprosessing_file import preprossesing
+from catboost import CatBoostClassifier
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-API_TOKEN = '7643982179:AAF4_OumwQFtSTjxJign5BwhP2AGdtldGdY'
+model_path = 'cat_boost_balanced.cbm'
+catboost_model = CatBoostClassifier()
+catboost_model.load_model(model_path)
 
-current_model = "boris"
+dct_path = 'dct.pkl'
+with open(dct_path, 'rb') as f:
+    loaded_dct = pickle.load(f)
 
-def predict_image_with_model(image_bytes):
-    if current_model == "boris":
-        return predict_boris(image_bytes)
-    elif current_model == "nikita":
-        return predict_nikita(image_bytes)
-    else:
-        return "Ошибка: модель не выбрана."
+API_TOKEN = 'token'
 
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    raw_str = update.message.text
+    raw_data = raw_str.split()
+    try:
+        processed = preprossesing(raw_data, loaded_dct)
+        prediction = catboost_model.predict(processed)
+        result = int(prediction[0])
+        await update.message.reply_text(f"Предсказание: {result}")
+    except Exception as e:
+        logger.error(f"Ошибка при предсказании: {e}")
+        await update.message.reply_text("Не удалось выполнить предсказание. Проверьте формат входных данных.")
 
-async def start(update: Update, context: CallbackContext) -> None:
-    await update.message.reply_text(
-        "Привет! Отправь мне изображение, и я сделаю предсказание. "
-        "Также ты можешь выбрать модель для предсказания с помощью команд:\n"
-        "/boris - модель Бориса\n"
-        "/nikita - модель Никиты"
-    )
-
-
-async def set_model_boris(update: Update, context: CallbackContext) -> None:
-    global current_model
-    current_model = "boris"
-    await update.message.reply_text("Модель переключена на Бориса!")
-
-
-async def set_model_nikita(update: Update, context: CallbackContext) -> None:
-    global current_model
-    current_model = "nikita"
-    await update.message.reply_text("Модель переключена на Никиту!")
-
-
-async def handle_photo(update: Update, context: CallbackContext) -> None:
-    photo = update.message.photo[-1]
-    file = await photo.get_file()
-    image_bytes = await file.download_as_bytearray()
-
-    prediction = predict_image_with_model(image_bytes)
-    await update.message.reply_text(f"Предсказание: {prediction}")
-
-
-# Основной цикл бота
 async def main() -> None:
+    nest_asyncio.apply()
     application = Application.builder().token(API_TOKEN).build()
-
-    # Обработчики команд
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("boris", set_model_boris))
-    application.add_handler(CommandHandler("nikita", set_model_nikita))
-
-    application.add_handler(MessageHandler(PHOTO, handle_photo))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     await application.run_polling()
 
-
 if __name__ == '__main__':
-    nest_asyncio.apply()
+    import asyncio
     asyncio.run(main())
